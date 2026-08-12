@@ -1,4 +1,19 @@
-# NLLB English↔Yoruba Translation on RunPod Serverless
+# NLLB Multilingual Translation on RunPod Serverless
+
+Supports translation between 10 languages, any direction:
+
+| Language | Code |
+|---|---|
+| English | `en` |
+| French | `fr` |
+| Arabic | `ar` |
+| German | `de` |
+| Spanish | `es` |
+| Hausa | `ha` |
+| Yoruba | `yo` |
+| Igbo | `ig` |
+| Swahili | `sw` |
+| Portuguese | `pt` |
 
 ## Files
 - `handler.py` — RunPod serverless handler that loads NLLB and translates
@@ -23,15 +38,14 @@ If not, skip straight to building — RunPod will build on their infra.
 ### Option A — Build locally with Docker
 
 ```bash
-docker login
-docker build -t <your-dockerhub-username>/nllb-yoruba:latest .
-docker push <your-dockerhub-username>/nllb-yoruba:latest
+docker build -t <your-dockerhub-username>/nllb-multilingual:latest .
+docker push <your-dockerhub-username>/nllb-multilingual:latest
 ```
 
 To use a different model size, pass a build arg:
 ```bash
 docker build --build-arg NLLB_MODEL=facebook/nllb-200-distilled-600M \
-  -t <your-dockerhub-username>/nllb-yoruba:latest .
+  -t <your-dockerhub-username>/nllb-multilingual:latest .
 ```
 
 ### Option B — Let GitHub Actions build and push it for you (no local Docker needed)
@@ -57,7 +71,7 @@ image and pushes it to GitHub Container Registry (GHCR) automatically.
 4. Once it finishes (~10-20 min, mostly downloading the model), your image
    is live at:
    ```
-   ghcr.io/<your-username>/nllb-yoruba:latest
+   ghcr.io/<your-username>/nllb-multilingual:latest
    ```
 5. By default GHCR packages are **private**. Either make the package public
    (repo → Packages → your package → Package settings → Change visibility),
@@ -73,8 +87,8 @@ for serverless.
 
 1. Go to runpod.io → Serverless → New Endpoint
 2. Choose "Custom Source" → Docker Image → paste your image path
-   - Docker Hub: `docker.io/<your-username>/nllb-yoruba:latest`
-   - GHCR: `ghcr.io/<your-username>/nllb-yoruba:latest`
+   - Docker Hub: `docker.io/<your-username>/nllb-multilingual:latest`
+   - GHCR: `ghcr.io/<your-username>/nllb-multilingual:latest`
 3. GPU selection:
    - distilled-600M → 16GB GPU (RTX 4000/A4000) is plenty
    - distilled-1.3B → 16-24GB GPU (A4000/A5000)
@@ -93,8 +107,8 @@ curl -X POST https://api.runpod.ai/v2/<ENDPOINT_ID>/runsync \
   -d '{
     "input": {
       "text": "Good morning, how are you today?",
-      "source_lang": "eng_Latn",
-      "target_lang": "yor_Latn"
+      "source_lang": "en",
+      "target_lang": "yo"
     }
   }'
 ```
@@ -104,11 +118,16 @@ Response:
 {
   "output": {
     "translation": "E kaaro, se alafia ni?",
-    "source_lang": "eng_Latn",
-    "target_lang": "yor_Latn"
+    "source_lang": "en",
+    "target_lang": "yo",
+    "num_chunks": 1
   }
 }
 ```
+
+Swap `source_lang`/`target_lang` to any of the 10 codes above to change the
+pair — e.g. `"source_lang": "fr", "target_lang": "ha"` translates French to
+Hausa. No redeploy needed, it's read from the request every time.
 
 Use `/run` instead of `/runsync` for async jobs on longer batches, then poll
 `/status/<job_id>`.
@@ -124,8 +143,16 @@ Use `/run` instead of `/runsync` for async jobs on longer batches, then poll
   Set `"chunk": false` in the input if you want the old single-shot
   behavior for short single-sentence inputs (marginally faster, no
   splitting overhead).
-- **Language codes**: NLLB uses FLORES-200 codes, not ISO 639-1. English is
-  `eng_Latn`, Yoruba is `yor_Latn` — not `en`/`yo`.
+- **Language codes**: use the short 2-letter codes from the table at the
+  top (`en`, `fr`, `ar`, `de`, `es`, `ha`, `yo`, `ig`, `sw`, `pt`). Full
+  NLLB FLORES-200 codes (e.g. `eng_Latn`) also still work if you send them
+  directly. To add an 11th language later, add one line to the
+  `LANG_CODES` dict at the top of `handler.py` with its FLORES-200 code —
+  no other changes needed, NLLB already supports 200 languages internally.
+- **Arabic note**: `ar` maps to Modern Standard Arabic (`arb_Arab`) in
+  NLLB. If you need a specific dialect (Egyptian, Moroccan, etc.) that's a
+  different FLORES-200 code — let me know and I can add it as a separate
+  code (e.g. `ar-eg`).
 - **Cost control**: Serverless bills per-second of GPU time while a request
   runs. Set min workers to 0 for a low-traffic app; set idle timeout
   (e.g. 5s) so workers spin down fast between requests.
