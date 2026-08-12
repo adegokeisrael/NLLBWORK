@@ -115,6 +115,15 @@ Use `/run` instead of `/runsync` for async jobs on longer batches, then poll
 
 ## Notes / gotchas
 
+- **Long text handling**: NLLB is trained mostly on single sentences, not
+  paragraphs. If you feed it a long multi-sentence block directly, it will
+  often translate only the first portion and stop early — this is a model
+  limitation, not a bug. `handler.py` now splits input text into sentences
+  and translates each one, then joins the results, so long documents are
+  translated fully and reliably. This is the default (`"chunk": true`).
+  Set `"chunk": false` in the input if you want the old single-shot
+  behavior for short single-sentence inputs (marginally faster, no
+  splitting overhead).
 - **Language codes**: NLLB uses FLORES-200 codes, not ISO 639-1. English is
   `eng_Latn`, Yoruba is `yor_Latn` — not `en`/`yo`.
 - **Cost control**: Serverless bills per-second of GPU time while a request
