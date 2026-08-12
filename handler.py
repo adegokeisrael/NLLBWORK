@@ -1,5 +1,9 @@
 """
-RunPod Serverless handler for NLLB-200 English<->Yoruba translation.
+RunPod Serverless handler for NLLB-200 multilingual translation.
+
+Supports 10 languages: English, French, Arabic, German, Spanish, Hausa,
+Yoruba, Igbo, Swahili, Portuguese — in any direction (any of the 10 as
+source, any of the 10 as target).
 
 NLLB is trained mainly on single sentences, not long paragraphs — if you
 feed it a big multi-sentence block, it will often translate the first
@@ -10,19 +14,23 @@ each sentence separately, then joins the results back together.
 Expected input (event["input"]):
 {
     "text": "Hello, how are you? I hope you are well.",
-    "source_lang": "eng_Latn",   # or "yor_Latn"
-    "target_lang": "yor_Latn",   # or "eng_Latn"
+    "source_lang": "en",         # simple 2-letter code, see LANG_CODES below
+    "target_lang": "yo",         # simple 2-letter code, see LANG_CODES below
     "max_length": 400,           # optional, max tokens PER SENTENCE
     "chunk": true                # optional, default true. Set false to
-                                  # force single-shot translation (old
-                                  # behavior) instead of sentence splitting.
+                                  # force single-shot translation instead
+                                  # of sentence splitting.
 }
+
+Full NLLB FLORES-200 codes (e.g. "eng_Latn") are also accepted directly in
+source_lang/target_lang if you prefer, for compatibility with earlier
+requests.
 
 Output:
 {
     "translation": "...",
-    "source_lang": "eng_Latn",
-    "target_lang": "yor_Latn",
+    "source_lang": "en",
+    "target_lang": "yo",
     "num_chunks": 12   # how many sentence chunks were translated
 }
 """
@@ -45,7 +53,35 @@ model = AutoModelForSeq2SeqLM.from_pretrained(
 model.eval()
 print("Model loaded.")
 
-VALID_LANGS = {"eng_Latn", "yor_Latn"}
+# Simple 2-letter codes (used in the prompt/request) -> NLLB FLORES-200 codes
+# (used internally by the model/tokenizer). Add more pairs here to support
+# additional languages later — NLLB supports 200 total.
+LANG_CODES = {
+    "en": "eng_Latn",   # English
+    "fr": "fra_Latn",   # French
+    "ar": "arb_Arab",   # Arabic (Modern Standard)
+    "de": "deu_Latn",   # German
+    "es": "spa_Latn",   # Spanish
+    "ha": "hau_Latn",   # Hausa
+    "yo": "yor_Latn",   # Yoruba
+    "ig": "ibo_Latn",   # Igbo
+    "sw": "swh_Latn",   # Swahili
+    "pt": "por_Latn",   # Portuguese
+}
+# Reverse lookup, so full NLLB codes in a request also resolve back to the
+# short code for the response.
+NLLB_TO_SHORT = {v: k for k, v in LANG_CODES.items()}
+
+
+def resolve_lang(code: str) -> str | None:
+    """Accepts either a short code ('en') or a full NLLB code
+    ('eng_Latn') and returns the NLLB code, or None if unrecognized."""
+    if code in LANG_CODES:
+        return LANG_CODES[code]
+    if code in NLLB_TO_SHORT:
+        return code
+    return None
+
 
 # Simple sentence splitter: splits on ., !, ? followed by whitespace and a
 # capital letter or end of string. Not perfect (e.g. abbreviations like
@@ -61,12 +97,12 @@ def split_into_sentences(text: str) -> list[str]:
     return [s.strip() for s in sentences if s.strip()]
 
 
-def translate_batch(sentences: list[str], source_lang: str, target_lang: str,
+def translate_batch(sentences: list[str], source_lang_nllb: str, target_lang_nllb: str,
                      max_length: int = 400, batch_size: int = 8) -> list[str]:
     """Translate a list of sentences, batching several through the model
     at once for efficiency rather than one-by-one."""
-    tokenizer.src_lang = source_lang
-    forced_bos_token_id = tokenizer.convert_tokens_to_ids(target_lang)
+    tokenizer.src_lang = source_lang_nllb
+    forced_bos_token_id = tokenizer.convert_tokens_to_ids(target_lang_nllb)
 
     results = []
     for i in range(0, len(sentences), batch_size):
@@ -93,17 +129,24 @@ def handler(event):
     job_input = event.get("input", {})
 
     text = job_input.get("text")
-    source_lang = job_input.get("source_lang", "eng_Latn")
-    target_lang = job_input.get("target_lang", "yor_Latn")
+    source_lang_raw = job_input.get("source_lang", "en")
+    target_lang_raw = job_input.get("target_lang", "yo")
     max_length = job_input.get("max_length", 400)
     chunk = job_input.get("chunk", True)
 
     if not text:
         return {"error": "Missing 'text' field in input."}
 
-    if source_lang not in VALID_LANGS or target_lang not in VALID_LANGS:
+    source_lang_nllb = resolve_lang(source_lang_raw)
+    target_lang_nllb = resolve_lang(target_lang_raw)
+
+    if source_lang_nllb is None or target_lang_nllb is None:
         return {
-            "error": f"source_lang/target_lang must be one of {sorted(VALID_LANGS)}"
+            "error": (
+                "source_lang/target_lang must be one of "
+                f"{sorted(LANG_CODES.keys())} (or their full NLLB codes: "
+                f"{sorted(LANG_CODES.values())})"
+            )
         }
 
     try:
@@ -112,13 +155,13 @@ def handler(event):
             if not sentences:
                 sentences = [text]
             translated_sentences = translate_batch(
-                sentences, source_lang, target_lang, max_length
+                sentences, source_lang_nllb, target_lang_nllb, max_length
             )
             translation = " ".join(translated_sentences)
             num_chunks = len(sentences)
         else:
             translation = translate_batch(
-                [text], source_lang, target_lang, max_length
+                [text], source_lang_nllb, target_lang_nllb, max_length
             )[0]
             num_chunks = 1
     except Exception as e:
@@ -126,8 +169,8 @@ def handler(event):
 
     return {
         "translation": translation,
-        "source_lang": source_lang,
-        "target_lang": target_lang,
+        "source_lang": NLLB_TO_SHORT.get(source_lang_nllb, source_lang_raw),
+        "target_lang": NLLB_TO_SHORT.get(target_lang_nllb, target_lang_raw),
         "num_chunks": num_chunks,
     }
 
